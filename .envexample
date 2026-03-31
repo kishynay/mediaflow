@@ -1,0 +1,6 @@
+# Copy this file to .env and update values
+AUTH_USERNAME=your_username
+AUTH_PASSWORD=your_strong_password
+PORT=3000
+MEDIA_DIR=./media
+# EXTERNAL_MEDIA_DIR=
