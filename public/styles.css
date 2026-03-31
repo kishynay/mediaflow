@@ -144,6 +144,25 @@ input, select { font-family: inherit; color: inherit; }
 .card-name { font-size: 0.85rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
 .card-meta { font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
 .card-type-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-subtle); color: var(--accent); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
+.card-actions { display: flex; gap: 8px; margin-top: 10px; }
+.card-action-btn {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hover);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+.card-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-light);
+}
+.card-action-btn.danger:hover {
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+}
 
 /* Video thumbnail loading shimmer */
 .card-thumb-placeholder.video-loading {
@@ -626,4 +645,3 @@ input, select { font-family: inherit; color: inherit; }
   .audio-disc { width: 100px; height: 100px; }
   .audio-title { font-size: 0.9rem; }
 }
-

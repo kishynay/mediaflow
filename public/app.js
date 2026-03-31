@@ -132,6 +132,8 @@ function normalizeItem(raw) {
   return {
     id: raw.id,
     name: raw.name || raw.id || "Untitled",
+    rawName: raw.id && raw.id.includes(":") ? raw.id.split(":").slice(1).join(":") : (raw.name || "Untitled"),
+    source: raw.source || "local",
     size: Number(raw.size || 0),
     modifiedAt: raw.modifiedAt || new Date(0).toISOString(),
     contentType,
@@ -240,9 +242,41 @@ function createCard(item) {
         <span class="card-type-badge">${kindLabel(item.kind)}</span>
         <span>${formatBytes(item.size)}</span>
       </div>
+      <div class="card-actions">
+        <button class="card-action-btn" data-action="download" title="Download file">Download</button>
+        <button class="card-action-btn danger" data-action="delete" title="Delete file">Delete</button>
+      </div>
     </div>
   `;
   div.addEventListener("click", () => openPlayer(item));
+
+  const downloadBtn = div.querySelector('[data-action="download"]');
+  const deleteBtn = div.querySelector('[data-action="delete"]');
+
+  downloadBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const downloadUrl = `/api/media/${encodeURIComponent(item.source)}/${encodeURIComponent(item.rawName)}/download`;
+    window.location.href = downloadUrl;
+  });
+
+  deleteBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const ok = window.confirm(`Delete "${item.name}"? This cannot be undone.`);
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/media/${encodeURIComponent(item.source)}/${encodeURIComponent(item.rawName)}`, {
+        method: "DELETE"
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showStatus(`Deleted "${item.name}"`);
+      if (currentItem && currentItem.id === item.id) closePlayer();
+      await fetchLibrary();
+    } catch (err) {
+      console.error("Delete failed:", err);
+      showStatus("Delete failed", true);
+    }
+  });
 
   // Async: generate video thumbnail
   if (isVideo) {

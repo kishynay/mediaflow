@@ -203,6 +203,18 @@ function streamMediaFile(fileName, filePath, req, res) {
   }
 }
 
+function resolveSourceFile(source, fileName) {
+  const sourceDir = MEDIA_SOURCES[source];
+  if (!sourceDir) return { error: "Forbidden", status: 403, filePath: null };
+  const filePath = buildSafeFilePath(sourceDir, fileName);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { error: "File not found", status: 404, filePath: null };
+  }
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) return { error: "File not found", status: 404, filePath: null };
+  return { filePath, sourceDir, stat };
+}
+
 // Serve media files at /media/<source>/<filename> with range support for streaming.
 app.get("/media/:source/:filename", (req, res) => {
   const source = req.params.source;
@@ -227,6 +239,30 @@ app.get("/media/:filename", (req, res) => {
     ? buildSafeFilePath(MEDIA_SOURCES.external, fileName)
     : null;
   return streamMediaFile(fileName, externalPath, req, res);
+});
+
+app.get("/api/media/:source/:filename/download", (req, res) => {
+  const { source, filename } = req.params;
+  const resolved = resolveSourceFile(source, filename);
+  if (!resolved.filePath) {
+    return res.status(resolved.status).json({ error: resolved.error });
+  }
+  return res.download(resolved.filePath, path.basename(filename));
+});
+
+app.delete("/api/media/:source/:filename", async (req, res) => {
+  const { source, filename } = req.params;
+  const resolved = resolveSourceFile(source, filename);
+  if (!resolved.filePath) {
+    return res.status(resolved.status).json({ error: resolved.error });
+  }
+
+  try {
+    await fs.promises.unlink(resolved.filePath);
+    return res.json({ message: "Deleted", source, name: path.basename(filename) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to delete file" });
+  }
 });
 
 // Optional upload endpoint (compatible with existing frontend).

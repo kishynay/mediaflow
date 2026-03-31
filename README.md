@@ -40,3 +40,5 @@ Notes:
 - `GET /api/media` -> list media files
 - `POST /api/upload` -> upload file (`multipart/form-data`, field name: `media`)
 - `GET /media/:id` -> stream media file
+- `GET /api/media/:source/:filename/download` -> download media file
+- `DELETE /api/media/:source/:filename` -> delete media file
