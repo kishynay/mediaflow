@@ -30,8 +30,11 @@ app.use(cors({ origin: API_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from public directory
-app.use(express.static(path.join(__dirname, 'public')));
+// Optionally serve frontend from backend (for local all-in-one or integrated deployment)
+const SERVE_FRONTEND = process.env.SERVE_FRONTEND !== 'false';
+if (SERVE_FRONTEND) {
+  app.use(express.static(path.join(__dirname, 'public')));
+}
 
 // GridFS Storage for file uploads
 const storage = new GridFsStorage({
