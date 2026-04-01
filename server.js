@@ -33,7 +33,7 @@ app.use(express.urlencoded({ extended: true }));
 // Optionally serve frontend from backend (for local all-in-one or integrated deployment)
 const SERVE_FRONTEND = process.env.SERVE_FRONTEND !== 'false';
 if (SERVE_FRONTEND) {
-  app.use(express.static(path.join(__dirname, 'public')));
+  app.use(express.static(path.join(__dirname, 'frontend')));
 }
 
 // GridFS Storage for file uploads
