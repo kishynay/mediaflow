@@ -129,16 +129,17 @@ function normalizeItem(raw) {
     (contentType.startsWith("video/") ? "video" :
      contentType.startsWith("audio/") ? "audio" :
      contentType.startsWith("image/") ? "image" : "other");
+  const id = raw.id || raw._id;
   return {
-    id: raw.id,
-    name: raw.name || raw.id || "Untitled",
-    rawName: raw.id && raw.id.includes(":") ? raw.id.split(":").slice(1).join(":") : (raw.name || "Untitled"),
-    source: raw.source || "local",
+    id,
+    name: raw.name || raw.originalName || id || "Untitled",
+    rawName: raw.name || raw.originalName || id || "Untitled",
+    source: raw.source || "mongodb",
     size: Number(raw.size || 0),
-    modifiedAt: raw.modifiedAt || new Date(0).toISOString(),
+    modifiedAt: raw.modifiedAt || raw.uploadDate || new Date(0).toISOString(),
     contentType,
     kind,
-    url: raw.url || `/media/${encodeURIComponent(raw.id)}`
+    url: raw.url || `/api/media/${encodeURIComponent(id)}/stream`
   };
 }
 
@@ -255,7 +256,7 @@ function createCard(item) {
 
   downloadBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const downloadUrl = `/api/media/${encodeURIComponent(item.source)}/${encodeURIComponent(item.rawName)}/download`;
+    const downloadUrl = `/api/media/${encodeURIComponent(item.id)}/download`;
     window.location.href = downloadUrl;
   });
 
@@ -265,7 +266,7 @@ function createCard(item) {
     if (!ok) return;
 
     try {
-      const res = await fetch(`/api/media/${encodeURIComponent(item.source)}/${encodeURIComponent(item.rawName)}`, {
+      const res = await fetch(`/api/media/${encodeURIComponent(item.id)}`, {
         method: "DELETE"
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

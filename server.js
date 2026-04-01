@@ -44,6 +44,7 @@ const storage = new GridFsStorage({
 const upload = multer({ storage });
 
 // Authentication middleware
+const AUTH_ENABLED = process.env.AUTH_ENABLED !== "false";
 const AUTH_USERNAME = process.env.AUTH_USERNAME || "admin";
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "change-me";
 
@@ -53,6 +54,7 @@ function unauthorized(res) {
 }
 
 function authMiddleware(req, res, next) {
+  if (!AUTH_ENABLED) return next();
   const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Basic ")) return unauthorized(res);
 
