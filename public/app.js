@@ -76,7 +76,7 @@ let visualizerRAF = null;
 let ambientRAF = null;
 const progressMap = JSON.parse(localStorage.getItem("media_progress") || "{}");
 
-const BACKEND_URL = window.location.hostname === "localhost" ? "http://localhost:3000" : "https://kishynay-mediaflow-backend.onrender.com";
+const BACKEND_URL = window.location.hostname === "localhost" ? "http://localhost:3000" : "https://mediaflow-backend-z17a.onrender.com";
 const AUTH_TOKEN_KEY = "mediaflow_jwt_token";
 
 function getAuthToken() {
