@@ -1,56 +1,51 @@
+require('dotenv').config();
 const express = require("express");
-const fs = require("fs");
-const path = require("path");
+const mongoose = require('mongoose');
 const multer = require("multer");
+const { GridFsStorage } = require('multer-gridfs-storage');
+const { GridFSBucket } = require('mongodb');
 const mime = require("mime-types");
+const path = require('path');
+const cors = require('cors');
 
-function loadDotEnv() {
-  const envPath = path.join(__dirname, ".env");
-  if (!fs.existsSync(envPath)) return;
+const connectDB = require('./config/database');
+const Media = require('./models/Media');
 
-  const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-
-    const idx = line.indexOf("=");
-    if (idx < 0) continue;
-
-    const key = line.slice(0, idx).trim();
-    let value = line.slice(idx + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    if (key && process.env[key] === undefined) {
-      process.env[key] = value;
-    }
-  }
-}
-
-loadDotEnv();
+// Connect to MongoDB
+connectDB();
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-const PUBLIC_DIR = path.join(__dirname, "public");
-const MEDIA_DIR = path.resolve(process.env.MEDIA_DIR || path.join(__dirname, "media"));
-const EXTERNAL_MEDIA_DIR = process.env.EXTERNAL_MEDIA_DIR
-  ? path.resolve(process.env.EXTERNAL_MEDIA_DIR)
-  : null;
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, 'public')));
+
+// GridFS Storage for file uploads
+const storage = new GridFsStorage({
+  url: process.env.MONGODB_URI || 'mongodb://localhost:27017/mediaflow',
+  options: { useNewUrlParser: true, useUnifiedTopology: true },
+  file: (req, file) => {
+    return new Promise((resolve, reject) => {
+      const filename = `${Date.now()}-${file.originalname.replace(/[^\w.\-() ]/g, "_").trim()}`;
+      const fileInfo = {
+        filename: filename,
+        bucketName: 'uploads'
+      };
+      resolve(fileInfo);
+    });
+  }
+});
+
+const upload = multer({ storage });
+
+// Authentication middleware
 const AUTH_USERNAME = process.env.AUTH_USERNAME || "admin";
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "change-me";
-
-// Ensure media directory exists.
-if (!fs.existsSync(MEDIA_DIR)) {
-  fs.mkdirSync(MEDIA_DIR, { recursive: true });
-}
-
-if (!process.env.AUTH_PASSWORD) {
-  console.warn("AUTH_PASSWORD is not set. Using default password 'change-me'.");
-}
 
 function unauthorized(res) {
   res.set("WWW-Authenticate", 'Basic realm="Mediaflow"');
@@ -75,28 +70,11 @@ function authMiddleware(req, res, next) {
   return next();
 }
 
-app.get("/health", (_, res) => {
-  res.json({ ok: true });
+// Apply auth middleware to all routes except health check
+app.use((req, res, next) => {
+  if (req.path === '/health') return next();
+  return authMiddleware(req, res, next);
 });
-
-app.use(authMiddleware);
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(PUBLIC_DIR));
-
-const storage = multer.diskStorage({
-  destination: (_, __, cb) => cb(null, MEDIA_DIR),
-  filename: (_, file, cb) => {
-    const safeName = path.basename(file.originalname).replace(/[^\w.\-() ]/g, "_").trim();
-    cb(null, `${Date.now()}-${safeName}`);
-  }
-});
-const upload = multer({ storage });
-
-const MEDIA_SOURCES = {
-  local: MEDIA_DIR,
-  ...(EXTERNAL_MEDIA_DIR ? { external: EXTERNAL_MEDIA_DIR } : {})
-};
 
 function detectType(fileName) {
   const contentType = mime.lookup(fileName) || "application/octet-stream";
@@ -118,229 +96,215 @@ function humanSize(bytes) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-async function readMediaFromDir(source, dirPath) {
-  if (!fs.existsSync(dirPath)) return [];
-  const stats = await fs.promises.stat(dirPath).catch(() => null);
-  if (!stats || !stats.isDirectory()) return [];
-
-  const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-  const files = entries.filter((e) => e.isFile()).map((e) => e.name);
-
-  return Promise.all(
-    files.map(async (fileName) => {
-      const fullPath = path.join(dirPath, fileName);
-      const stat = await fs.promises.stat(fullPath);
-      const { type, contentType } = detectType(fileName);
-      return {
-        id: `${source}:${fileName}`,
-        name: fileName.replace(/^\d+-/, ""),
-        rawName: fileName,
-        source,
-        sizeBytes: stat.size,
-        size: humanSize(stat.size),
-        type,
-        contentType,
-        modifiedAt: stat.mtime.toISOString(),
-        _mtimeMs: stat.mtimeMs,
-        url: `/media/${source}/${encodeURIComponent(fileName)}`
-      };
-    })
-  );
-}
-
-function buildSafeFilePath(dirPath, fileName) {
-  const safeFileName = path.basename(fileName);
-  const filePath = path.join(dirPath, safeFileName);
-  if (!filePath.startsWith(dirPath)) return null;
-  return filePath;
-}
-
-async function readMedia() {
-  const reads = [readMediaFromDir("local", MEDIA_SOURCES.local)];
-  if (MEDIA_SOURCES.external) {
-    reads.push(readMediaFromDir("external", MEDIA_SOURCES.external));
-  }
-
-  const allItems = await Promise.all(reads);
-  const list = allItems.flat();
-  list.sort((a, b) => b._mtimeMs - a._mtimeMs);
-  return list.map(({ _mtimeMs, ...rest }) => rest);
-}
-
-function streamMediaFile(fileName, filePath, req, res) {
-  if (!filePath || !fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "File not found" });
-  }
-
-  const stat = fs.statSync(filePath);
-  if (!stat.isFile()) return res.status(404).json({ error: "File not found" });
-  const fileSize = stat.size;
-  const { contentType } = detectType(fileName);
-  const isStreamable = contentType.startsWith("video/") || contentType.startsWith("audio/");
-
-  if (isStreamable && req.headers.range) {
-    const parts = req.headers.range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 1024 * 1024 - 1, fileSize - 1); // 1MB chunks
-    const chunkSize = end - start + 1;
-
-    res.writeHead(206, {
-      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-      "Accept-Ranges": "bytes",
-      "Content-Length": chunkSize,
-      "Content-Type": contentType,
-    });
-
-    fs.createReadStream(filePath, { start, end }).pipe(res);
-  } else {
-    res.writeHead(200, {
-      "Content-Length": fileSize,
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes",
-    });
-
-    fs.createReadStream(filePath).pipe(res);
-  }
-}
-
-function resolveSourceFile(source, fileName) {
-  const sourceDir = MEDIA_SOURCES[source];
-  if (!sourceDir) return { error: "Forbidden", status: 403, filePath: null };
-  const filePath = buildSafeFilePath(sourceDir, fileName);
-  if (!filePath || !fs.existsSync(filePath)) {
-    return { error: "File not found", status: 404, filePath: null };
-  }
-  const stat = fs.statSync(filePath);
-  if (!stat.isFile()) return { error: "File not found", status: 404, filePath: null };
-  return { filePath, sourceDir, stat };
-}
-
-// Serve media files at /media/<source>/<filename> with range support for streaming.
-app.get("/media/:source/:filename", (req, res) => {
-  const source = req.params.source;
-  const fileName = req.params.filename;
-  const sourceDir = MEDIA_SOURCES[source];
-
-  if (!sourceDir) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
-  const filePath = buildSafeFilePath(sourceDir, fileName);
-  return streamMediaFile(fileName, filePath, req, res);
-});
-
-// Backward compatibility for old URLs: /media/<filename> checks local first, then external.
-app.get("/media/:filename", (req, res) => {
-  const fileName = req.params.filename;
-  const localPath = buildSafeFilePath(MEDIA_SOURCES.local, fileName);
-  if (localPath && fs.existsSync(localPath)) return streamMediaFile(fileName, localPath, req, res);
-
-  const externalPath = MEDIA_SOURCES.external
-    ? buildSafeFilePath(MEDIA_SOURCES.external, fileName)
-    : null;
-  return streamMediaFile(fileName, externalPath, req, res);
-});
-
-app.get("/api/media/:source/:filename/download", (req, res) => {
-  const { source, filename } = req.params;
-  const resolved = resolveSourceFile(source, filename);
-  if (!resolved.filePath) {
-    return res.status(resolved.status).json({ error: resolved.error });
-  }
-  return res.download(resolved.filePath, path.basename(filename));
-});
-
-app.delete("/api/media/:source/:filename", async (req, res) => {
-  const { source, filename } = req.params;
-  const resolved = resolveSourceFile(source, filename);
-  if (!resolved.filePath) {
-    return res.status(resolved.status).json({ error: resolved.error });
-  }
-
+// Health check endpoint
+app.get("/health", async (req, res) => {
   try {
-    await fs.promises.unlink(resolved.filePath);
-    return res.json({ message: "Deleted", source, name: path.basename(filename) });
-  } catch (err) {
+    await mongoose.connection.db.admin().ping();
+    res.json({ ok: true, database: 'connected' });
+  } catch (error) {
+    res.status(500).json({ ok: false, database: 'disconnected', error: error.message });
+  }
+});
+
+// Upload endpoint
+app.post("/api/upload", upload.single("media"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded." });
+
+    const { type, contentType } = detectType(req.file.filename);
+
+    // Create media document
+    const media = new Media({
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      contentType: req.file.contentType,
+      size: req.file.size,
+      metadata: {
+        type: type
+      },
+      gridFsId: req.file.id
+    });
+
+    await media.save();
+
+    return res.status(201).json({
+      message: "Upload successful.",
+      item: {
+        id: media._id,
+        name: media.originalName,
+        size: humanSize(media.size),
+        type: media.metadata.type,
+        contentType: media.contentType,
+        url: `/api/media/${media._id}/stream`,
+        uploadDate: media.uploadDate
+      }
+    });
+  } catch (error) {
+    console.error('Upload error:', error);
+    return res.status(500).json({ error: "Upload failed" });
+  }
+});
+
+// Get all media
+app.get("/api/media", async (req, res) => {
+  try {
+    const media = await Media.find().sort({ uploadDate: -1 });
+    const items = media.map(item => ({
+      id: item._id,
+      name: item.originalName,
+      size: humanSize(item.size),
+      sizeBytes: item.size,
+      modifiedAt: item.uploadDate.toISOString(),
+      contentType: item.contentType,
+      kind: item.metadata.type,
+      source: 'mongodb',
+      url: `/api/media/${item._id}/stream`
+    }));
+
+    return res.json({ items });
+  } catch (error) {
+    console.error('Error fetching media:', error);
+    return res.status(500).json({ error: "Failed to load media" });
+  }
+});
+
+// Stream media file
+app.get("/api/media/:id/stream", async (req, res) => {
+  try {
+    const media = await Media.findById(req.params.id);
+    if (!media) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const bucket = new GridFSBucket(mongoose.connection.db, {
+      bucketName: 'uploads'
+    });
+
+    const downloadStream = bucket.openDownloadStream(media.gridFsId);
+
+    downloadStream.on('error', (error) => {
+      console.error('Stream error:', error);
+      return res.status(500).json({ error: "Stream error" });
+    });
+
+    // Set headers
+    res.set({
+      'Content-Type': media.contentType,
+      'Content-Length': media.size,
+      'Accept-Ranges': 'bytes'
+    });
+
+    // Handle range requests for video/audio streaming
+    const isStreamable = media.contentType.startsWith("video/") || media.contentType.startsWith("audio/");
+    if (isStreamable && req.headers.range) {
+      const parts = req.headers.range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : media.size - 1;
+
+      if (start >= media.size || end >= media.size) {
+        res.status(416).send('Requested range not satisfiable');
+        return;
+      }
+
+      const chunkSize = end - start + 1;
+      res.status(206);
+      res.set({
+        'Content-Range': `bytes ${start}-${end}/${media.size}`,
+        'Content-Length': chunkSize
+      });
+
+      downloadStream.start(start);
+    }
+
+    downloadStream.pipe(res);
+  } catch (error) {
+    console.error('Stream error:', error);
+    return res.status(500).json({ error: "Failed to stream file" });
+  }
+});
+
+// Download media file
+app.get("/api/media/:id/download", async (req, res) => {
+  try {
+    const media = await Media.findById(req.params.id);
+    if (!media) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    const bucket = new GridFSBucket(mongoose.connection.db, {
+      bucketName: 'uploads'
+    });
+
+    res.set({
+      'Content-Type': media.contentType,
+      'Content-Disposition': `attachment; filename="${media.originalName}"`
+    });
+
+    const downloadStream = bucket.openDownloadStream(media.gridFsId);
+    downloadStream.pipe(res);
+  } catch (error) {
+    console.error('Download error:', error);
+    return res.status(500).json({ error: "Failed to download file" });
+  }
+});
+
+// Delete media file
+app.delete("/api/media/:id", async (req, res) => {
+  try {
+    const media = await Media.findById(req.params.id);
+    if (!media) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    // Delete from GridFS
+    const bucket = new GridFSBucket(mongoose.connection.db, {
+      bucketName: 'uploads'
+    });
+    await bucket.delete(media.gridFsId);
+
+    // Delete from database
+    await Media.findByIdAndDelete(req.params.id);
+
+    return res.json({
+      message: "Deleted",
+      name: media.originalName
+    });
+  } catch (error) {
+    console.error('Delete error:', error);
     return res.status(500).json({ error: "Failed to delete file" });
   }
 });
 
-// Optional upload endpoint (compatible with existing frontend).
-app.post("/api/upload", upload.single("media"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded." });
-  const { type, contentType } = detectType(req.file.filename);
-  return res.status(201).json({
-    message: "Upload successful.",
-    item: {
-      id: req.file.filename,
-      name: req.file.filename.replace(/^\d+-/, ""),
-      size: req.file.size,
-      type,
-      contentType,
-      url: `/media/${encodeURIComponent(req.file.filename)}`
-    }
-  });
-});
-
-// Required endpoint: /media-list
-app.get("/media-list", async (_, res) => {
+// Backward compatibility endpoint
+app.get("/media-list", async (req, res) => {
   try {
-    const items = await readMedia();
-    const response = items.map((item) => ({
-      name: item.rawName,
-      size: item.size,
-      type: item.type,
-      url: item.url
+    const media = await Media.find().sort({ uploadDate: -1 });
+    const response = media.map(item => ({
+      name: item.filename,
+      size: humanSize(item.size),
+      type: item.metadata.type,
+      url: `/api/media/${item._id}/stream`
     }));
     return res.json(response);
-  } catch (err) {
-    return res.status(500).json({ error: "Failed to load media from server" });
+  } catch (error) {
+    console.error('Error fetching media list:', error);
+    return res.status(500).json({ error: "Failed to load media" });
   }
 });
 
-// Backward-compatible endpoint used by current UI.
-app.get("/api/media", async (_, res) => {
-  try {
-    const items = await readMedia();
-    return res.json({
-      items: items.map((item) => ({
-        id: item.id,
-        name: item.name,
-        size: item.sizeBytes,
-        modifiedAt: item.modifiedAt,
-        contentType: item.contentType,
-        kind: item.type,
-        source: item.source,
-        url: item.url
-      }))
-    });
-  } catch (err) {
-    return res.status(500).json({ error: "Failed to load media from server" });
-  }
-});
-
-// Avoid "Cannot GET /media" confusion.
-app.get("/media", async (_, res) => {
-  try {
-    const items = await readMedia();
-    return res.json({
-      message: "Media directory root. Use /media/<filename> for files.",
-      count: items.length,
-      sample: items.slice(0, 10).map((x) => x.url)
-    });
-  } catch (err) {
-    return res.status(500).json({ error: "Failed to load media from server" });
-  }
-});
-
-// 404 fallback for missing API/media routes.
+// 404 fallback
 app.use((req, res) => {
-  if (req.path.startsWith("/api/") || req.path.startsWith("/media")) {
+  if (req.path.startsWith("/api/")) {
     return res.status(404).json({ error: "Not found" });
   }
   return res.status(404).send("Not found");
 });
 
-app.listen(PORT, () => {
-  console.log(`Media server running at http://localhost:${PORT}`);
-});
+// For local development
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Media server running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;
