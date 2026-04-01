@@ -1,15 +1,32 @@
-# MediaFlow Deployment Instructions (Render + Vercel)
+# MediaFlow Deployment Instructions (Render + Vercel) — PRODUCTION READY
 
-This guide lists the exact steps to deploy the MediaFlow app (frontend + backend), including env values, commands, and verification checks.
+## 📁 Current Project Structure
+```
+/mediaflow (repo root)
+  /frontend → deployed on Vercel (static)
+    index.html
+    app.js
+    styles.css
+    vercel.json
+  /backend → deployed on Render (Node.js server)
+    server.js
+    package.json
+    config/database.js
+    models/Media.js
+    .env
+  README.md
+  package.json (optional)
+```
 
-## 1. Status: Current project in repo
-- Backend: `server.js`, `config/database.js`, `models/Media.js`
-- Frontend: `public/index.html`, `public/styles.css`, `public/app.js`
-- Auth: JWT (`POST /api/auth/login`)
-- Database: MongoDB Atlas GridFS
+## 1. Status: Production-Ready Fixes Applied
+- ✅ **CORS**: Dynamic multi-origin validation (`CORS_ORIGINS` env list)
+- ✅ **JWT**: Middleware skips OPTIONS preflight + /api/auth
+- ✅ **Upload**: Memory storage + manual GridFS (no crashes)
+- ✅ **Auth**: Token stored in localStorage, sent with all requests
+- ✅ **Frontend**: Correct FormData field (`"media"`) + auth headers
 
-## 2. .env contents (local development)
-Create `e:\mediaflow\.env` with:
+## 2. Backend `.env` (Render)
+Create/update `backend/.env`:
 
 ```env
 AUTH_USERNAME=kishan
@@ -17,67 +34,111 @@ AUTH_PASSWORD=radhe@8374
 AUTH_ENABLED=true
 JWT_SECRET=ULTR@-s3cuRE-KEY-1234567890-abcd
 TOKEN_EXPIRY=3h
-FRONTEND_URL=https://kishynay-mediaflow.vercel.app
 PORT=3000
-MONGODB_URI=mongodb+srv://<atlas_user>:<atlas_password>@<cluster>.mongodb.net/mediaflow?retryWrites=true&w=majority
+
+MONGODB_URI=mongodb+srv://Vercel-Admin-radhe:nkILBjirRUiAXo5D@radhe.d14unaf.mongodb.net/mediaflow?retryWrites=true&w=majority
+
+# CORS: Accept requests from multiple Vercel deployments (comma-separated, no spaces)
+CORS_ORIGINS=https://kishynay-mediaflow.vercel.app,https://mediaflow-one.vercel.app
+
+SERVE_FRONTEND=false
 ```
 
-- Replace `<atlas_user>`, `<atlas_password>`, `<cluster>` with your Atlas values.
-- Use a strong `JWT_SECRET`.
+**Key:** `CORS_ORIGINS` must list ALL frontend origins exactly as they appear in browser.
 
-## 3. Render backend service (Web Service)
+## 3. Render Backend Deployment
 
-1. Create new service: **Web Services → New Web Service**
-2. Git repo: `kishynay/mediaflow` branch `main`
-3. Name: `mediaflow` (or `mediaflow-backend`)
-4. Root directory: leave empty (repo root) or `backend` if split
-5. Build command: `npm install`
-6. Start command: `node server.js`
-7. Instance: Free (for test) or Starter for better stability
-8. Health check path: `/health`
+1. Go to [Render Dashboard](https://dashboard.render.com)
+2. **Create → Web Service**
+3. **Connect repo:** `kishynay/mediaflow`
+4. **Configuration:**
+   - **Name:** `mediaflow-backend` (or `mediaflow`)
+   - **Build Command:** `cd backend && npm install`
+   - **Start Command:** `cd backend && node server.js`
+   - **Root Directory:** `/` (leave empty, Render will build from root)
 
-### Render environment variables
-- `MONGODB_URI` = your Atlas URI
-- `JWT_SECRET` = strong secret
-- `AUTH_ENABLED` = `true`
-- `AUTH_USERNAME` = `kishan`
-- `AUTH_PASSWORD` = `radhe@8374`
-- `FRONTEND_URL` = `https://kishynay-mediaflow.vercel.app`
-- `PORT` = `10000` (or Render default)
+5. **Environment Variables** (set in Render dashboard):
+   ```
+   MONGODB_URI=mongodb+srv://Vercel-Admin-radhe:nkILBjirRUiAXo5D@radhe.d14unaf.mongodb.net/mediaflow?retryWrites=true&w=majority
+   JWT_SECRET=ULTR@-s3cuRE-KEY-1234567890-abcd
+   AUTH_ENABLED=true
+   AUTH_USERNAME=kishan
+   AUTH_PASSWORD=radhe@8374
+   TOKEN_EXPIRY=3h
+   CORS_ORIGINS=https://kishynay-mediaflow.vercel.app,https://mediaflow-one.vercel.app
+   SERVE_FRONTEND=false
+   ```
 
-9. Deploy and ensure status becomes **Live**.
+6. Click **Deploy**. Wait for status → **Live** (green).
+7. Copy the Render URL (e.g., `https://mediaflow-backend-z17a.onrender.com`)
 
-## 4. Vercel frontend service (Static Site)
+## 4. Vercel Frontend Deployment
 
-1. Import the same repo into Vercel.
-2. Project root: existing repo
-3. Build command: none (static file mode)
-4. Output directory: `public`
-5. Set env var:
-   - `BACKEND_URL` = `https://<your-render-backend>.onrender.com`
-6. Deploy.
+1. Go to [Vercel Dashboard](https://vercel.com)
+2. **Add New → Project**
+3. **Import Git Repository:** `kishynay/mediaflow`
+4. **Configuration:**
+   - **Project Name:** any (e.g., `mediaflow-frontend`)
+   - **Root Directory:** Use `frontend/`
 
-## 5. Frontend code updates
-In `public/app.js`, set:
+5. **Build settings** (should auto-detect):
+   - **Build Command:** (leave empty for static)
+   - **Output Directory:** (leave empty)
+   - **Install Command:** (leave empty)
 
+6. Click **Deploy**. Vercel will build static frontend.
+7. Copy the Vercel URL (e.g., `https://kishynay-mediaflow.vercel.app`)
+
+## 5. Frontend URL Configuration
+
+Frontend code (`frontend/app.js`) automatically detects:
 ```js
 const BACKEND_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:3000'
-  : 'https://<your-render-backend>.onrender.com';
+  : 'https://mediaflow-backend-z17a.onrender.com';
 ```
 
-Ensure API calls use full endpoints:
-- `fetch(`${BACKEND_URL}/api/media`, { headers: authHeaders() })`
-- upload: `POST ${BACKEND_URL}/api/upload`
-- delete: `DELETE ${BACKEND_URL}/api/media/${id}`
+**Update this to match your actual Render backend URL** if different.
 
-## 6. API authentication flow
+## 6. Verification Checklist
 
-1. Request login:
-   - `POST /api/auth/login` body `{ username, password }`
-2. Server responds `{ token }`.
-3. Save token to localStorage:
-   - `localStorage.setItem('mediaflow_jwt_token', token)`
+### Local Testing
+```bash
+cd backend
+npm install
+npm start
+# Should start on http://localhost:3000
+```
+
+Then open `http://localhost:3000` (frontend served from backend) or serve frontend locally:
+```bash
+cd frontend
+npx http-server -p 8000 # or any simple HTTP server
+# Open http://localhost:8000
+```
+
+### Production Testing
+1. Go to `https://kishynay-mediaflow.vercel.app`
+2. **Login** with:
+   - Username: `kishan`
+   - Password: `radhe@8374`
+3. **Check browser DevTools (F12):**
+   - `localStorage.mediaflow_jwt_token` should exist
+   - Network tab: `Authorization: Bearer <token>` headers present
+   - No `CORS` errors in console
+
+4. **Upload a file** and verify:
+   - No 401/403 errors
+   - File appears in library
+   - `GET /api/media/*/stream` works
+
+5. **Render logs** should show:
+   ```
+   POST /api/upload 201 ✓
+   GET /api/media 200 ✓
+   ```
+
+## 7. Multiple Frontend URLs (Staging)
 4. Set header on every API call:
    - `Authorization: Bearer ${token}`
 
