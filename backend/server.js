@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require("express");
 const mongoose = require('mongoose');
 const multer = require("multer");
-const { GridFsStorage } = require('multer-gridfs-storage');
 const { GridFSBucket } = require('mongodb');
 const mime = require("mime-types");
 const path = require('path');
@@ -26,7 +25,12 @@ const JWT_SECRET = process.env.JWT_SECRET || "change-me";
 const TOKEN_EXPIRY = process.env.TOKEN_EXPIRY || "3h";
 
 // Middleware
-app.use(cors({ origin: API_ORIGIN, credentials: true }));
+app.use(cors({
+  origin: 'https://kishynay-mediaflow.vercel.app',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -36,22 +40,8 @@ if (SERVE_FRONTEND) {
   app.use(express.static(path.join(__dirname, 'frontend')));
 }
 
-// GridFS Storage for file uploads
-const storage = new GridFsStorage({
-  url: process.env.MONGODB_URI || 'mongodb://localhost:27017/mediaflow',
-  options: { useNewUrlParser: true, useUnifiedTopology: true },
-  file: (req, file) => {
-    return new Promise((resolve, reject) => {
-      const filename = `${Date.now()}-${file.originalname.replace(/[^\w.\-() ]/g, "_").trim()}`;
-      const fileInfo = {
-        filename: filename,
-        bucketName: 'uploads'
-      };
-      resolve(fileInfo);
-    });
-  }
-});
-
+// File upload storage
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // Auth system: JWT token-based, with optional fallback to basic for compatibility
@@ -65,6 +55,8 @@ function jwtMiddleware(req, res, next) {
   if (!AUTH_ENABLED) return next();
 
   if (req.path.startsWith('/api/auth')) return next();
+
+  if (req.method === 'OPTIONS') return next();
 
   const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Bearer ")) {
@@ -131,34 +123,49 @@ app.post("/api/upload", upload.single("media"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded." });
 
-    const { type, contentType } = detectType(req.file.filename);
+    const { type, contentType } = detectType(req.file.originalname);
 
-    // Create media document
-    const media = new Media({
-      filename: req.file.filename,
-      originalName: req.file.originalname,
-      contentType: req.file.contentType,
-      size: req.file.size,
-      metadata: {
-        type: type
-      },
-      gridFsId: req.file.id
+    const bucket = new GridFSBucket(mongoose.connection.db, { bucketName: 'uploads' });
+    const filename = `${Date.now()}-${req.file.originalname.replace(/[^\w.\-() ]/g, "_").trim()}`;
+
+    const uploadStream = bucket.openUploadStream(filename, {
+      contentType: req.file.mimetype,
+      metadata: { type }
     });
 
-    await media.save();
+    uploadStream.end(req.file.buffer);
 
-    return res.status(201).json({
-      message: "Upload successful.",
-      item: {
-        id: media._id,
-        name: media.originalName,
-        size: humanSize(media.size),
-        type: media.metadata.type,
-        contentType: media.contentType,
-        url: `/api/media/${media._id}/stream`,
-        uploadDate: media.uploadDate
-      }
+    uploadStream.on('finish', async () => {
+      const media = new Media({
+        filename: filename,
+        originalName: req.file.originalname,
+        contentType: req.file.mimetype,
+        size: req.file.size,
+        metadata: { type },
+        gridFsId: uploadStream.id
+      });
+
+      await media.save();
+
+      return res.status(201).json({
+        message: "Upload successful.",
+        item: {
+          id: media._id,
+          name: media.originalName,
+          size: humanSize(media.size),
+          type: media.metadata.type,
+          contentType: media.contentType,
+          url: `/api/media/${media._id}/stream`,
+          uploadDate: media.uploadDate
+        }
+      });
     });
+
+    uploadStream.on('error', (error) => {
+      console.error('Upload stream error:', error);
+      return res.status(500).json({ error: "Upload failed" });
+    });
+
   } catch (error) {
     console.error('Upload error:', error);
     return res.status(500).json({ error: "Upload failed" });
