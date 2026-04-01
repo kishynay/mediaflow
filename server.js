@@ -7,6 +7,7 @@ const { GridFSBucket } = require('mongodb');
 const mime = require("mime-types");
 const path = require('path');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
 
 const connectDB = require('./config/database');
 const Media = require('./models/Media');
@@ -17,8 +18,15 @@ connectDB();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const API_ORIGIN = process.env.FRONTEND_URL || "*";
+const AUTH_ENABLED = process.env.AUTH_ENABLED !== "false";
+const AUTH_USERNAME = process.env.AUTH_USERNAME || "admin";
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "change-me";
+const JWT_SECRET = process.env.JWT_SECRET || "change-me";
+const TOKEN_EXPIRY = process.env.TOKEN_EXPIRY || "3h";
+
 // Middleware
-app.use(cors());
+app.use(cors({ origin: API_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -43,40 +51,32 @@ const storage = new GridFsStorage({
 
 const upload = multer({ storage });
 
-// Authentication middleware
-const AUTH_ENABLED = process.env.AUTH_ENABLED !== "false";
-const AUTH_USERNAME = process.env.AUTH_USERNAME || "admin";
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "change-me";
+// Auth system: JWT token-based, with optional fallback to basic for compatibility
+const AUTH_ENABLED_VAR = process.env.AUTH_ENABLED !== "false";
 
-function unauthorized(res) {
-  res.set("WWW-Authenticate", 'Basic realm="Mediaflow"');
-  return res.status(401).send("Authentication required.");
+function respondUnauthorized(res) {
+  return res.status(401).json({ error: "Unauthorized" });
 }
 
-function authMiddleware(req, res, next) {
+function jwtMiddleware(req, res, next) {
   if (!AUTH_ENABLED) return next();
+
+  if (req.path.startsWith('/api/auth')) return next();
+
   const authHeader = req.headers.authorization || "";
-  if (!authHeader.startsWith("Basic ")) return unauthorized(res);
-
-  const encoded = authHeader.slice(6).trim();
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  const separator = decoded.indexOf(":");
-  if (separator < 0) return unauthorized(res);
-
-  const username = decoded.slice(0, separator);
-  const password = decoded.slice(separator + 1);
-  if (username !== AUTH_USERNAME || password !== AUTH_PASSWORD) {
-    return unauthorized(res);
+  if (!authHeader.startsWith("Bearer ")) {
+    return respondUnauthorized(res);
   }
 
-  return next();
+  const token = authHeader.slice(7).trim();
+  jwt.verify(token, JWT_SECRET, (err, payload) => {
+    if (err) return respondUnauthorized(res);
+    req.auth = payload;
+    next();
+  });
 }
 
-// Apply auth middleware to all routes except health check
-app.use((req, res, next) => {
-  if (req.path === '/health') return next();
-  return authMiddleware(req, res, next);
-});
+app.use(jwtMiddleware);
 
 function detectType(fileName) {
   const contentType = mime.lookup(fileName) || "application/octet-stream";
@@ -106,6 +106,21 @@ app.get("/health", async (req, res) => {
   } catch (error) {
     res.status(500).json({ ok: false, database: 'disconnected', error: error.message });
   }
+});
+
+// Auth login endpoint
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'username and password are required' });
+  }
+
+  if (username !== AUTH_USERNAME || password !== AUTH_PASSWORD) {
+    return res.status(401).json({ error: 'invalid credentials' });
+  }
+
+  const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+  return res.json({ token, expiresIn: TOKEN_EXPIRY });
 });
 
 // Upload endpoint

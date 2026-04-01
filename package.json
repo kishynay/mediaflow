@@ -15,7 +15,8 @@
     "mongoose": "^8.6.0",
     "multer-gridfs-storage": "^5.0.2",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "jsonwebtoken": "^9.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

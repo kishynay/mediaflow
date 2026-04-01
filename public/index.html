@@ -31,6 +31,26 @@
   <!-- Status Toast -->
   <div id="statusToast" class="status-bar"></div>
 
+  <!-- Auth Panel -->
+  <div id="loginPanel" class="login-panel hidden">
+    <div class="login-box">
+      <h2>MediaFlow Login</h2>
+      <p>Enter credentials to access your media library.</p>
+      <label>
+        Username
+        <input id="loginUsername" type="text" placeholder="Username" autocomplete="username" />
+      </label>
+      <label>
+        Password
+        <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" />
+      </label>
+      <div class="login-actions">
+        <button id="loginBtn" class="btn btn-primary">Sign in</button>
+      </div>
+      <div id="loginError" class="login-error"></div>
+    </div>
+  </div>
+
   <div class="app-container">
     <!-- Header -->
     <header class="header">

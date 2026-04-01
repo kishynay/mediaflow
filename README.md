@@ -62,10 +62,71 @@ A modern media server with:
 
 2. **Set Environment Variables in Vercel:**
    ```
-   AUTH_USERNAME=your_username
-   AUTH_PASSWORD=your_secure_password
+   AUTH_ENABLED=false
+   JWT_SECRET=your_super_secret
+   FRONTEND_URL=https://<your-vercel-app>.vercel.app
    MONGODB_URI=your_mongodb_atlas_connection_string
+   
+   # This is for the backend app on Render/Railway
+   BACKEND_URL=https://<your-backend>.onrender.com
    ```
+
+3. **Set Base URL in Frontend:**
+   - In `public/app.js`, change `BACKEND_URL` to your backend URL:
+   ```js
+   const BACKEND_URL = window.location.hostname === "localhost" ? "http://localhost:3000" : "https://<your-backend>.onrender.com";
+   ```
+
+4. **Deploy:**
+   - Vercel redeploys on push; open your app URL.
+
+---
+
+## Render Deployment (Backend)
+
+1. **Create project:**
+   - In Render, click "New -> Web Service".
+   - Connect GitHub repository.
+   - Select root directory `.` (or a `/backend` folder if you split).
+
+2. **Environment variables:**
+   - `MONGODB_URI` (Atlas connection string)
+   - `JWT_SECRET` (strong secret)
+   - `AUTH_ENABLED=true`
+   - `FRONTEND_URL=https://<your-vercel-app>.vercel.app`
+   - `PORT=10000` (or Render default)
+
+3. **Build command:**
+   - `npm install`
+   - `npm run start`
+
+4. **Health check path:** `/health`
+
+5. **Once deployed:**
+   - Backend URL becomes `https://<your-project>.onrender.com`
+   - Set `BACKEND_URL` in frontend accordingly
+
+---
+
+## Frontend / Backend split
+
+Current repo uses:
+- frontend files in `public/`
+- backend server in `server.js`
+
+For strict split, move frontend to `/frontend`:
+- `frontend/index.html`
+- `frontend/styles.css`
+- `frontend/app.js`
+
+Move backend to `/backend`:
+- `backend/server.js`
+- `backend/config/database.js`
+- `backend/models/Media.js`
+- `backend/package.json` (copy existing + `start`) 
+
+Then adjust the render deploy path accordingly.
+
 
 3. **Deploy:**
    - Vercel will build and deploy automatically

@@ -76,6 +76,70 @@ let visualizerRAF = null;
 let ambientRAF = null;
 const progressMap = JSON.parse(localStorage.getItem("media_progress") || "{}");
 
+const BACKEND_URL = window.location.hostname === "localhost" ? "http://localhost:3000" : "https://kishynay-mediaflow-backend.onrender.com";
+const AUTH_TOKEN_KEY = "mediaflow_jwt_token";
+
+function getAuthToken() {
+  return localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+function setAuthToken(token) {
+  localStorage.setItem(AUTH_TOKEN_KEY, token);
+}
+
+function clearAuthToken() {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+}
+
+function authHeaders() {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function showAuthLogin(message) {
+  document.getElementById('loginPanel').classList.remove('hidden');
+  document.querySelector('.app-container').classList.add('hidden');
+  if (message) document.getElementById('loginError').textContent = message;
+}
+
+function hideAuthLogin() {
+  document.getElementById('loginPanel').classList.add('hidden');
+  document.querySelector('.app-container').classList.remove('hidden');
+  document.getElementById('loginError').textContent = '';
+}
+
+async function loginUser() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value.trim();
+
+  if (!username || !password) {
+    showStatus('Please enter username and password', true);
+    return;
+  }
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Login failed (${res.status})`);
+    }
+
+    const body = await res.json();
+    setAuthToken(body.token);
+    hideAuthLogin();
+    fetchLibrary();
+    showStatus('Logged in successfully');
+  } catch (error) {
+    showStatus(error.message || 'Login failed', true);
+    document.getElementById('loginError').textContent = error.message;
+  }
+}
+
 // ===== Utility Functions =====
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -145,9 +209,25 @@ function normalizeItem(raw) {
 
 // ===== Fetch Media Library =====
 async function fetchLibrary() {
+  if (!getAuthToken()) {
+    showAuthLogin();
+    return;
+  }
+
   try {
-    const res = await fetch("/api/media");
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch(`${BACKEND_URL}/api/media`, {
+      headers: {
+        ...authHeaders(),
+        "Accept": "application/json"
+      }
+    });
+    if (!res.ok) {
+      if (res.status === 401) {
+        clearAuthToken();
+        showAuthLogin();
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
     const data = await res.json();
     mediaLibrary = (data.items || []).map(normalizeItem);
     render();
@@ -266,8 +346,12 @@ function createCard(item) {
     if (!ok) return;
 
     try {
-      const res = await fetch(`/api/media/${encodeURIComponent(item.id)}`, {
-        method: "DELETE"
+      const res = await fetch(`${BACKEND_URL}/api/media/${encodeURIComponent(item.id)}`, {
+        method: "DELETE",
+        headers: {
+          ...authHeaders(),
+          "Accept": "application/json"
+        }
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       showStatus(`Deleted "${item.name}"`);
@@ -382,7 +466,8 @@ async function uploadFile(file) {
 
   try {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload");
+    xhr.open("POST", `${BACKEND_URL}/api/upload`);
+    xhr.setRequestHeader("Authorization", `Bearer ${getAuthToken()}`);
     xhr.upload.addEventListener("progress", (e) => {
       if (e.lengthComputable) uploadFill.style.width = Math.round((e.loaded / e.total) * 100) + "%";
     });
@@ -1071,6 +1156,25 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Login panel wiring
+const loginBtn = document.getElementById('loginBtn');
+if (loginBtn) {
+  loginBtn.addEventListener('click', loginUser);
+}
+
+const loginPassword = document.getElementById('loginPassword');
+if (loginPassword) {
+  loginPassword.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') loginUser();
+  });
+}
+
+if (!getAuthToken()) {
+  showAuthLogin();
+} else {
+  hideAuthLogin();
+  fetchLibrary();
+}
 
 // ===== Init =====
-fetchLibrary();
+
