@@ -17,20 +17,30 @@ connectDB();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const API_ORIGIN = process.env.FRONTEND_URL || "*";
 const AUTH_ENABLED = process.env.AUTH_ENABLED !== "false";
 const AUTH_USERNAME = process.env.AUTH_USERNAME || "admin";
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || "change-me";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me";
 const TOKEN_EXPIRY = process.env.TOKEN_EXPIRY || "3h";
 
+const allowedOrigins = (process.env.CORS_ORIGINS || "").split(",").map(v => v.trim()).filter(Boolean);
+
 // Middleware
 app.use(cors({
-  origin: 'https://kishynay-mediaflow.vercel.app',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('CORS policy: origin not allowed'), false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  exposedHeaders: ['Content-Range', 'X-Total-Count'],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
+
+app.options('*', (req, res) => res.sendStatus(204));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

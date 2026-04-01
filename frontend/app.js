@@ -93,6 +93,7 @@ function clearAuthToken() {
 
 function authHeaders() {
   const token = getAuthToken();
+  console.debug('[authHeaders]', { token });
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -130,6 +131,7 @@ async function loginUser() {
     }
 
     const body = await res.json();
+    console.debug('[loginUser] token', body.token);
     setAuthToken(body.token);
     hideAuthLogin();
     fetchLibrary();
@@ -215,6 +217,7 @@ async function fetchLibrary() {
   }
 
   try {
+    console.debug('[fetchLibrary] calling', `${BACKEND_URL}/api/media`, { headers: authHeaders() });
     const res = await fetch(`${BACKEND_URL}/api/media`, {
       headers: {
         ...authHeaders(),
