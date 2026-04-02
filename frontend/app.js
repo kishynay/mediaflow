@@ -1,3 +1,4 @@
+console.log("APP JS LOADED - NEW VERSION");
 // ===== DOM References =====
 const mainContent = document.getElementById("mainContent");
 const searchInput = document.getElementById("searchInput");
@@ -76,7 +77,16 @@ let visualizerRAF = null;
 let ambientRAF = null;
 const progressMap = JSON.parse(localStorage.getItem("media_progress") || "{}");
 
-const BACKEND_URL = window.location.hostname === "localhost" ? "http://localhost:3000" : "https://mediaflow-backend-z17a.onrender.com";
+const BACKEND_URL = window.location.hostname === "localhost" ? "http://localhost:5000" : "https://mediaflow-backend-z17a.onrender.com";
+function apiUrl(path) {
+  if (!path) return BACKEND_URL;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${BACKEND_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function mediaStreamUrl(id) {
+  return apiUrl(`/api/media/${encodeURIComponent(id)}/stream`);
+}
 const AUTH_TOKEN_KEY = "mediaflow_jwt_token";
 
 function getAuthToken() {
@@ -119,7 +129,7 @@ async function loginUser() {
   }
 
   try {
-    const res = await fetch(`${BACKEND_URL}/api/auth/login`, {
+    const res = await fetch(apiUrl("/api/auth/login"), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password })
@@ -196,6 +206,7 @@ function normalizeItem(raw) {
      contentType.startsWith("audio/") ? "audio" :
      contentType.startsWith("image/") ? "image" : "other");
   const id = raw.id || raw._id;
+  const resolvedUrl = raw.url ? apiUrl(raw.url) : mediaStreamUrl(id);
   return {
     id,
     name: raw.name || raw.originalName || id || "Untitled",
@@ -205,7 +216,7 @@ function normalizeItem(raw) {
     modifiedAt: raw.modifiedAt || raw.uploadDate || new Date(0).toISOString(),
     contentType,
     kind,
-    url: raw.url || `/api/media/${encodeURIComponent(id)}/stream`
+    url: resolvedUrl
   };
 }
 
@@ -217,8 +228,8 @@ async function fetchLibrary() {
   }
 
   try {
-    console.debug('[fetchLibrary] calling', `${BACKEND_URL}/api/media`, { headers: authHeaders() });
-    const res = await fetch(`${BACKEND_URL}/api/media`, {
+    console.debug('[fetchLibrary] calling', apiUrl("/api/media"), { headers: authHeaders() });
+    const res = await fetch(apiUrl("/api/media"), {
       headers: {
         ...authHeaders(),
         "Accept": "application/json"
@@ -339,7 +350,7 @@ function createCard(item) {
 
   downloadBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const downloadUrl = `/api/media/${encodeURIComponent(item.id)}/download`;
+    const downloadUrl = apiUrl(`/api/media/${encodeURIComponent(item.id)}/download`);
     window.location.href = downloadUrl;
   });
 
@@ -349,7 +360,7 @@ function createCard(item) {
     if (!ok) return;
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/media/${encodeURIComponent(item.id)}`, {
+      const res = await fetch(apiUrl(`/api/media/${encodeURIComponent(item.id)}`), {
         method: "DELETE",
         headers: {
           ...authHeaders(),
@@ -469,7 +480,7 @@ async function uploadFile(file) {
 
   try {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${BACKEND_URL}/api/upload`);
+    xhr.open("POST", apiUrl("/api/upload"));
     xhr.setRequestHeader("Authorization", `Bearer ${getAuthToken()}`);
     xhr.upload.addEventListener("progress", (e) => {
       if (e.lengthComputable) uploadFill.style.width = Math.round((e.loaded / e.total) * 100) + "%";
@@ -1180,4 +1191,3 @@ if (!getAuthToken()) {
 }
 
 // ===== Init =====
-
