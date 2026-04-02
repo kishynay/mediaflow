@@ -33,21 +33,53 @@
 
   <!-- Auth Panel -->
   <div id="loginPanel" class="login-panel hidden">
-    <div class="login-box">
-      <h2>MediaFlow Login</h2>
-      <p>Enter credentials to access your media library.</p>
-      <label>
-        Username
-        <input id="loginUsername" type="text" placeholder="Username" autocomplete="username" />
-      </label>
-      <label>
-        Password
-        <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" />
-      </label>
-      <div class="login-actions">
-        <button id="loginBtn" class="btn btn-primary">Sign in</button>
+    <div class="login-panel-glow" aria-hidden="true"></div>
+    <div class="login-shell">
+      <div class="login-hero">
+        <div class="login-hero-badge">Personal Media Cloud</div>
+        <h2>One place for your videos, audio, and images.</h2>
+        <p>Stream instantly with secure access, fast previews, and clean organization across devices.</p>
+        <div class="login-hero-stats">
+          <div class="login-stat">
+            <span>⚡</span>
+            <strong>GridFS streaming</strong>
+            <small>Smooth media playback</small>
+          </div>
+          <div class="login-stat">
+            <span>🔐</span>
+            <strong>JWT protected</strong>
+            <small>Secure authenticated access</small>
+          </div>
+          <div class="login-stat">
+            <span>☁️</span>
+            <strong>Cloud ready</strong>
+            <small>Vercel + Render deployment</small>
+          </div>
+        </div>
       </div>
-      <div id="loginError" class="login-error"></div>
+      <div class="login-box">
+        <div class="login-brand">
+          <span class="login-brand-icon">▶</span>
+          <span>MediaFlow</span>
+        </div>
+        <h3>Welcome back</h3>
+        <p>Sign in to manage and stream your media library.</p>
+
+        <label class="login-field">
+          Username
+          <input id="loginUsername" type="text" placeholder="Enter username" autocomplete="username" />
+        </label>
+        <label class="login-field">
+          Password
+          <input id="loginPassword" type="password" placeholder="Enter password" autocomplete="current-password" />
+        </label>
+
+        <div class="login-actions">
+          <button id="loginBtn" class="btn btn-primary">Sign in to MediaFlow</button>
+        </div>
+        <div id="loginError" class="login-error"></div>
+        <div class="login-footnote">Protected workspace • Authorized users only</div>
+      </div>
     </div>
   </div>
 
