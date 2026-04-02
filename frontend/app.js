@@ -200,19 +200,25 @@ function showStatus(message, isError = false) {
 
 // ===== Normalize API Data =====
 function normalizeItem(raw) {
+  if (!raw) return null;
+
   const contentType = raw.contentType || "";
   const kind = raw.kind ||
     (contentType.startsWith("video/") ? "video" :
      contentType.startsWith("audio/") ? "audio" :
      contentType.startsWith("image/") ? "image" : "other");
-  const id = raw.id || raw._id;
+  const id = String(raw.id || raw._id || raw.gridFsId || "");
+  if (!id) return null;
+
+  const sizeBytes = Number(raw.sizeBytes ?? raw.size ?? 0);
   const resolvedUrl = raw.url ? apiUrl(raw.url) : mediaStreamUrl(id);
+
   return {
     id,
     name: raw.name || raw.originalName || id || "Untitled",
     rawName: raw.name || raw.originalName || id || "Untitled",
     source: raw.source || "mongodb",
-    size: Number(raw.size || 0),
+    size: Number.isFinite(sizeBytes) ? sizeBytes : 0,
     modifiedAt: raw.modifiedAt || raw.uploadDate || new Date(0).toISOString(),
     contentType,
     kind,
@@ -243,7 +249,20 @@ async function fetchLibrary() {
       throw new Error(`HTTP ${res.status}`);
     }
     const data = await res.json();
-    mediaLibrary = (data.items || []).map(normalizeItem);
+    const items = (data.items || []).map(normalizeItem).filter(Boolean);
+    mediaLibrary = items;
+
+    const sourceCounts = items.reduce((acc, item) => {
+      const key = item.source || "unknown";
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    console.debug("[fetchLibrary] loaded items", {
+      total: items.length,
+      sourceCounts
+    });
+
     render();
   } catch (err) {
     console.error("Failed to load media:", err);
