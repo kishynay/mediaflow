@@ -13,32 +13,45 @@ const mediaModule = require("./routes/mediaRoutes");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+function normalizeOrigin(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
 const allowedOrigins = (process.env.CORS_ORIGINS || "")
   .split(",")
-  .map((v) => v.trim())
+  .map(normalizeOrigin)
   .filter(Boolean);
-const defaultAllowedOrigins = ["https://kishynay-mediaflow.vercel.app"];
+const defaultAllowedOrigins = [
+  "https://kishynay-mediaflow.vercel.app",
+  "https://mediaflow-one.vercel.app"
+];
 const mergedAllowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...allowedOrigins]));
-const projectPreviewOriginPattern = /^https:\/\/kishynay-mediaflow(?:-[a-z0-9-]+)?\.vercel\.app$/i;
+const projectPreviewOriginPatterns = [
+  /^https:\/\/kishynay-mediaflow(?:-[a-z0-9-]+)?\.vercel\.app$/i,
+  /^https:\/\/mediaflow-one(?:-[a-z0-9-]+)?\.vercel\.app$/i
+];
 
 const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
 
-    if (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:")) {
+    const cleanOrigin = normalizeOrigin(origin);
+
+    if (cleanOrigin.startsWith("http://localhost:") || cleanOrigin.startsWith("http://127.0.0.1:")) {
       return callback(null, true);
     }
 
-    if (mergedAllowedOrigins.includes(origin)) {
+    if (mergedAllowedOrigins.includes(cleanOrigin)) {
       return callback(null, true);
     }
 
-    // Allow Vercel preview URLs for this project (e.g. -git-main-<hash>.vercel.app)
-    if (projectPreviewOriginPattern.test(origin)) {
+    // Allow Vercel preview URLs for known projects (e.g. -git-main-<hash>.vercel.app)
+    if (projectPreviewOriginPatterns.some((pattern) => pattern.test(cleanOrigin))) {
       return callback(null, true);
     }
 
-    return callback(new Error(`CORS policy: origin ${origin} not allowed`));
+    console.warn(`[cors] blocked origin=${cleanOrigin}`);
+    return callback(new Error(`CORS policy: origin ${cleanOrigin} not allowed`));
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
@@ -114,6 +127,8 @@ app.use((err, req, res, next) => {
 
 async function startServer() {
   await connectDB();
+  console.log(`[cors] static allowlist=${mergedAllowedOrigins.join(",")}`);
+  console.log(`[cors] preview patterns=${projectPreviewOriginPatterns.map((p) => p.toString()).join(" | ")}`);
   app.listen(PORT, () => {
     console.log(`Media server running at http://localhost:${PORT}`);
   });

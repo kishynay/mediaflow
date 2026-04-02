@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "start": "npm --prefix backend start",
+    "dev": "npm --prefix backend dev"
+  },
   "dependencies": {
     "cors": "^2.8.6"
   }
