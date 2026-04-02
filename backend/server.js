@@ -86,8 +86,8 @@ app.get("/health", async (req, res) => {
 // Backward compatibility endpoint
 app.get("/media-list", authMiddleware, async (req, res) => {
   try {
-    const media = await Media.find().sort({ uploadDate: -1 });
-    const response = media.map((item) => ({
+    const mediaRes = await Media.find().sort({ uploadDate: -1 });
+    const response = mediaRes.map((item) => ({
       name: item.filename,
       size: item.size,
       type: item.metadata?.type,

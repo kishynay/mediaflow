@@ -41,5 +41,6 @@ const mediaSchema = new mongoose.Schema({
 // Index for faster queries
 mediaSchema.index({ uploadDate: -1 });
 mediaSchema.index({ 'metadata.type': 1 });
+mediaSchema.index({ gridFsId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Media', mediaSchema);

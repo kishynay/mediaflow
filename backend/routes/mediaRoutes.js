@@ -38,7 +38,11 @@ function humanSize(bytes) {
 }
 
 function getBucketName() {
-  return process.env.GRIDFS_BUCKET || "uploads";
+  return process.env.GRIDFS_BUCKET || process.env.GRIDFS_BUCKET_NAME || "uploads";
+}
+
+function getDbName() {
+  return mongoose.connection?.db?.databaseName || mongoose.connection?.name || "unknown";
 }
 
 function getBucket() {
@@ -95,6 +99,51 @@ function toObjectId(id) {
   return new mongoose.Types.ObjectId(String(id));
 }
 
+function toErrorDetails(error) {
+  return {
+    name: error?.name || "Error",
+    message: error?.message || "Unknown error",
+    code: error?.code || null
+  };
+}
+
+function logMediaEvent(event, details = {}, level = "log") {
+  const logger = console[level] || console.log;
+  logger(`[media:${event}]`, {
+    env: process.env.NODE_ENV || "development",
+    db: getDbName(),
+    bucket: getBucketName(),
+    ...details
+  });
+}
+
+function buildUploadErrorResponse(error, maxFileSize) {
+  if (!error) {
+    return { status: 500, body: { error: "Upload failed" } };
+  }
+
+  if (error instanceof multer.MulterError) {
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return {
+        status: 413,
+        body: {
+          error: `File size exceeds ${Math.floor(maxFileSize / (1024 * 1024))}MB limit`
+        }
+      };
+    }
+
+    return {
+      status: 400,
+      body: { error: "Upload validation failed", details: error.message }
+    };
+  }
+
+  return {
+    status: 500,
+    body: { error: "Upload failed", details: error.message || "Unknown error" }
+  };
+}
+
 async function resolveMediaTarget(id) {
   const objectId = toObjectId(id);
   if (!objectId) {
@@ -145,6 +194,97 @@ async function resolveMediaTarget(id) {
   return { found: false, status: 404, error: "File not found" };
 }
 
+async function listMediaItems() {
+  const bucketName = getBucketName();
+  const dbName = getDbName();
+  const filesCollection = getFilesCollection();
+  const mediaCollection = getMediaCollection();
+
+  const gridFsFiles = await filesCollection
+    .find(
+      {},
+      {
+        projection: {
+          _id: 1,
+          filename: 1,
+          length: 1,
+          uploadDate: 1,
+          contentType: 1,
+          metadata: 1
+        }
+      }
+    )
+    .sort({ uploadDate: -1 })
+    .toArray();
+
+  const gridFsIds = gridFsFiles.map((file) => file._id);
+  const mediaDocs = gridFsIds.length
+    ? await mediaCollection
+      .find(
+        { gridFsId: { $in: [...gridFsIds, ...gridFsIds.map((id) => String(id))] } },
+        {
+          projection: {
+            _id: 1,
+            originalName: 1,
+            contentType: 1,
+            size: 1,
+            uploadDate: 1,
+            metadata: 1,
+            gridFsId: 1
+          }
+        }
+      )
+      .toArray()
+    : [];
+
+  const mediaByGridFsId = new Map();
+  for (const doc of mediaDocs) {
+    mediaByGridFsId.set(String(doc.gridFsId), doc);
+  }
+
+  const items = gridFsFiles.map((fileDoc) => {
+    const mediaDoc = mediaByGridFsId.get(String(fileDoc._id));
+    const sizeBytes = toSafeSize(mediaDoc?.size ?? fileDoc.length);
+    const contentType = mediaDoc?.contentType
+      || fileDoc.contentType
+      || mime.lookup(mediaDoc?.originalName || fileDoc.filename || "")
+      || "application/octet-stream";
+    const name = mediaDoc?.originalName || fileDoc.metadata?.originalName || fileDoc.filename;
+    const kind = normalizeKind(mediaDoc?.metadata?.type || fileDoc.metadata?.type, contentType, name);
+    const modifiedAt = toSafeIso(mediaDoc?.uploadDate || fileDoc.uploadDate);
+
+    return {
+      id: String(fileDoc._id),
+      mediaId: mediaDoc?._id ? String(mediaDoc._id) : null,
+      name,
+      size: sizeBytes,
+      sizeBytes,
+      sizeLabel: humanSize(sizeBytes),
+      modifiedAt,
+      contentType,
+      kind,
+      source: mediaDoc ? "gridfs+media" : "gridfs",
+      url: `/api/media/${fileDoc._id.toString()}/stream`
+    };
+  });
+
+  const orphanedCount = items.filter((item) => item.source === "gridfs").length;
+
+  return {
+    items,
+    debug: {
+      env: process.env.NODE_ENV || "development",
+      dbName,
+      bucketName,
+      gridFsFilesCount: gridFsFiles.length,
+      mediaDocsCount: mediaDocs.length,
+      orphanedGridFsCount: orphanedCount,
+      sampleGridFsIds: items.slice(0, 10).map((item) => item.id),
+      sampleOrphanedIds: items.filter((item) => item.source === "gridfs").slice(0, 10).map((item) => item.id)
+    }
+  };
+}
+
 async function uploadHandler(req, res) {
   try {
     if (!req.file) {
@@ -158,8 +298,17 @@ async function uploadHandler(req, res) {
 
     const { type, contentType } = detectType(req.file.originalname);
     const bucket = getBucket();
-    const safeOriginalName = req.file.originalname.replace(/[^\w.\-() ]/g, "_").trim();
+    const safeOriginalName = req.file.originalname.replace(/[^\w.\-() ]/g, "_").trim() || "upload";
     const filename = `${Date.now()}-${safeOriginalName}`;
+
+    logMediaEvent("upload:start", {
+      originalName: req.file.originalname,
+      filename,
+      mimeType: req.file.mimetype || null,
+      detectedContentType: contentType || req.file.mimetype || null,
+      detectedType: type,
+      sizeBytes: req.file.size
+    });
 
     const uploadStream = bucket.openUploadStream(filename, {
       contentType: contentType || req.file.mimetype,
@@ -171,22 +320,36 @@ async function uploadHandler(req, res) {
     });
 
     uploadStream.on("error", (error) => {
+      logMediaEvent("upload:gridfs-error", {
+        originalName: req.file?.originalname || null,
+        filename,
+        ...toErrorDetails(error)
+      }, "error");
+
       if (!res.headersSent) {
         return res.status(500).json({ error: "Upload stream failed", details: error.message });
       }
+
+      return res.destroy(error);
     });
 
     uploadStream.on("finish", async () => {
-      try {
-        const gridFsId = uploadStream.id;
-        if (!gridFsId) {
-          if (!res.headersSent) {
-            return res.status(500).json({ error: "Upload completed but file ID is missing" });
-          }
-          return;
-        }
+      const gridFsId = uploadStream.id;
 
-        const media = new Media({
+      if (!gridFsId) {
+        logMediaEvent("upload:missing-gridfs-id", {
+          originalName: req.file?.originalname || null,
+          filename
+        }, "error");
+
+        if (!res.headersSent) {
+          return res.status(500).json({ error: "Upload completed but file ID is missing" });
+        }
+        return;
+      }
+
+      try {
+        const media = await Media.create({
           filename,
           originalName: req.file.originalname,
           contentType: contentType || req.file.mimetype,
@@ -195,7 +358,14 @@ async function uploadHandler(req, res) {
           gridFsId
         });
 
-        await media.save();
+        logMediaEvent("upload:success", {
+          originalName: req.file.originalname,
+          filename,
+          mediaId: String(media._id),
+          gridFsId: String(gridFsId),
+          sizeBytes: media.size,
+          detectedType: media.metadata?.type || type
+        });
 
         return res.status(201).json({
           message: "Upload successful.",
@@ -210,12 +380,27 @@ async function uploadHandler(req, res) {
           }
         });
       } catch (dbError) {
+        logMediaEvent("upload:media-save-failed", {
+          originalName: req.file.originalname,
+          filename,
+          gridFsId: String(gridFsId),
+          ...toErrorDetails(dbError)
+        }, "error");
+
         try {
-          if (uploadStream.id) {
-            await getBucket().delete(uploadStream.id);
-          }
-        } catch (_) {
-          // best effort cleanup
+          await getBucket().delete(gridFsId);
+          logMediaEvent("upload:rollback-success", {
+            originalName: req.file.originalname,
+            filename,
+            gridFsId: String(gridFsId)
+          }, "warn");
+        } catch (rollbackError) {
+          logMediaEvent("upload:rollback-failed", {
+            originalName: req.file.originalname,
+            filename,
+            gridFsId: String(gridFsId),
+            rollback: toErrorDetails(rollbackError)
+          }, "error");
         }
 
         if (!res.headersSent) {
@@ -226,6 +411,11 @@ async function uploadHandler(req, res) {
 
     uploadStream.end(req.file.buffer);
   } catch (error) {
+    logMediaEvent("upload:handler-error", {
+      originalName: req.file?.originalname || null,
+      ...toErrorDetails(error)
+    }, "error");
+
     return res.status(500).json({ error: "Upload failed", details: error.message });
   }
 }
@@ -236,94 +426,42 @@ router.get("/", authMiddleware, async (req, res) => {
       return res.status(503).json({ error: "Database not connected" });
     }
 
-    const bucketName = getBucketName();
-    const dbName = mongoose.connection.db.databaseName;
-    const filesCollection = getFilesCollection();
-    const mediaCollection = getMediaCollection();
+    const { items, debug } = await listMediaItems();
 
-    const gridFsFiles = await filesCollection
-      .find(
-        {},
-        {
-          projection: {
-            _id: 1,
-            filename: 1,
-            length: 1,
-            uploadDate: 1,
-            contentType: 1,
-            metadata: 1
-          }
-        }
-      )
-      .sort({ uploadDate: -1 })
-      .toArray();
-
-    const gridFsIds = gridFsFiles.map((file) => file._id);
-    const mediaDocs = gridFsIds.length
-      ? await mediaCollection
-        .find(
-          { gridFsId: { $in: [...gridFsIds, ...gridFsIds.map((id) => String(id))] } },
-          {
-            projection: {
-              _id: 1,
-              originalName: 1,
-              contentType: 1,
-              size: 1,
-              uploadDate: 1,
-              metadata: 1,
-              gridFsId: 1
-            }
-          }
-        )
-        .toArray()
-      : [];
-
-    const mediaByGridFsId = new Map();
-    for (const doc of mediaDocs) {
-      mediaByGridFsId.set(String(doc.gridFsId), doc);
-    }
-
-    const items = gridFsFiles.map((fileDoc) => {
-      const mediaDoc = mediaByGridFsId.get(String(fileDoc._id));
-      const sizeBytes = toSafeSize(mediaDoc?.size ?? fileDoc.length);
-      const contentType = mediaDoc?.contentType
-        || fileDoc.contentType
-        || mime.lookup(mediaDoc?.originalName || fileDoc.filename || "")
-        || "application/octet-stream";
-      const name = mediaDoc?.originalName || fileDoc.metadata?.originalName || fileDoc.filename;
-      const kind = normalizeKind(mediaDoc?.metadata?.type || fileDoc.metadata?.type, contentType, name);
-      const modifiedAt = toSafeIso(mediaDoc?.uploadDate || fileDoc.uploadDate);
-
-      return {
-        id: String(fileDoc._id),
-        mediaId: mediaDoc?._id ? String(mediaDoc._id) : null,
-        name,
-        size: sizeBytes,
-        sizeBytes,
-        sizeLabel: humanSize(sizeBytes),
-        modifiedAt,
-        contentType,
-        kind,
-        source: mediaDoc ? "gridfs+media" : "gridfs",
-        url: `/api/media/${fileDoc._id.toString()}/stream`
-      };
+    logMediaEvent("list", {
+      files: debug.gridFsFilesCount,
+      mediaDocs: debug.mediaDocsCount,
+      orphaned: debug.orphanedGridFsCount,
+      firstIds: debug.sampleGridFsIds.slice(0, 5)
     });
 
-    const orphanedMetadataCount = items.filter((item) => item.source === "gridfs").length;
-    console.log(
-      `[media:list] env=${process.env.NODE_ENV || "development"} db=${dbName} bucket=${bucketName} files=${gridFsFiles.length} mediaDocs=${mediaDocs.length} orphaned=${orphanedMetadataCount}`
-    );
-    console.log(
-      `[media:list] firstIds=${items.slice(0, 5).map((item) => item.id).join(",") || "none"}`
-    );
+    if (req.query.debug === "1") {
+      return res.json({ items, debug });
+    }
 
     return res.json({ items });
   } catch (error) {
+    logMediaEvent("list:error", toErrorDetails(error), "error");
     return res.status(500).json({ error: "Failed to load media", details: error.message });
   }
 });
 
-router.post("/upload", authMiddleware, upload.single("media"), uploadHandler);
+router.post("/upload", authMiddleware, (req, res, next) => {
+  const maxFileSize = Number(process.env.MAX_FILE_SIZE_BYTES || 500 * 1024 * 1024);
+
+  upload.single("media")(req, res, (error) => {
+    if (error) {
+      const response = buildUploadErrorResponse(error, maxFileSize);
+      logMediaEvent("upload:middleware-error", {
+        originalName: req.file?.originalname || null,
+        ...toErrorDetails(error)
+      }, response.status >= 500 ? "error" : "warn");
+      return res.status(response.status).json(response.body);
+    }
+
+    return uploadHandler(req, res, next);
+  });
+});
 
 router.get("/:id/stream", async (req, res) => {
   try {
@@ -413,7 +551,6 @@ router.get("/:id/stream", async (req, res) => {
         "Content-Length": chunkSize
       });
 
-      // GridFS end is non-inclusive; HTTP end is inclusive.
       downloadStream = bucket.openDownloadStream(gridFsId, { start, end: end + 1 });
     } else {
       res.status(200);
@@ -429,17 +566,30 @@ router.get("/:id/stream", async (req, res) => {
       downloadStream = bucket.openDownloadStream(gridFsId);
     }
 
-    console.log(
-      `[media:stream] id=${req.params.id} resolvedBy=${resolvedBy} db=${mongoose.connection.db.databaseName} bucket=${getBucketName()} gridFsId=${String(gridFsId)} size=${totalSize} contentType=${contentType} range=${rangeHeader || "none"}`
-    );
+    logMediaEvent("stream", {
+      requestId: req.params.id,
+      resolvedBy,
+      gridFsId: String(gridFsId),
+      sizeBytes: totalSize,
+      contentType,
+      range: rangeHeader || "none"
+    });
 
     downloadStream.on("error", (error) => {
+      const message = String(error?.message || "");
+      const isMissingFile = error?.code === "FileNotFound" || /FileNotFound|not found/i.test(message);
+
+      logMediaEvent("stream:error", {
+        requestId: req.params.id,
+        resolvedBy,
+        gridFsId: String(gridFsId),
+        ...toErrorDetails(error)
+      }, isMissingFile ? "warn" : "error");
+
       if (res.headersSent) {
         return res.destroy(error);
       }
 
-      const message = String(error?.message || "");
-      const isMissingFile = error?.code === "FileNotFound" || /FileNotFound|not found/i.test(message);
       if (isMissingFile) {
         return res.status(404).json({ error: "File content not found in GridFS" });
       }
@@ -449,6 +599,11 @@ router.get("/:id/stream", async (req, res) => {
 
     downloadStream.pipe(res);
   } catch (error) {
+    logMediaEvent("stream:handler-error", {
+      requestId: req.params.id,
+      ...toErrorDetails(error)
+    }, "error");
+
     if (!res.headersSent) {
       return res.status(500).json({ error: "Failed to stream file", details: error.message });
     }
@@ -464,7 +619,6 @@ router.get("/:id/download", async (req, res) => {
 
     const media = resolved.mediaDoc || null;
     const gridFsFile = resolved.gridFsFile || null;
-
     const safeName = String(media?.originalName || gridFsFile?.filename || "download").replace(/"/g, "");
 
     res.set({
@@ -475,14 +629,26 @@ router.get("/:id/download", async (req, res) => {
     const downloadStream = getBucket().openDownloadStream(resolved.gridFsId);
 
     downloadStream.on("error", (error) => {
+      logMediaEvent("download:error", {
+        requestId: req.params.id,
+        gridFsId: String(resolved.gridFsId),
+        ...toErrorDetails(error)
+      }, "error");
+
       if (!res.headersSent) {
         return res.status(500).json({ error: "Failed to download file", details: error.message });
       }
+
       return res.destroy(error);
     });
 
     downloadStream.pipe(res);
   } catch (error) {
+    logMediaEvent("download:handler-error", {
+      requestId: req.params.id,
+      ...toErrorDetails(error)
+    }, "error");
+
     return res.status(500).json({ error: "Failed to download file", details: error.message });
   }
 });
@@ -496,8 +662,12 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 
     try {
       await getBucket().delete(resolved.gridFsId);
-    } catch (_) {
-      // Continue DB delete even if GridFS delete fails.
+    } catch (error) {
+      logMediaEvent("delete:gridfs-delete-failed", {
+        requestId: req.params.id,
+        gridFsId: String(resolved.gridFsId),
+        ...toErrorDetails(error)
+      }, "warn");
     }
 
     if (resolved.mediaDoc?._id) {
@@ -508,11 +678,22 @@ router.delete("/:id", authMiddleware, async (req, res) => {
       });
     }
 
+    logMediaEvent("delete:success", {
+      requestId: req.params.id,
+      gridFsId: String(resolved.gridFsId),
+      mediaId: resolved.mediaDoc?._id ? String(resolved.mediaDoc._id) : null
+    });
+
     return res.json({
       message: "Deleted successfully",
       name: resolved.mediaDoc?.originalName || resolved.gridFsFile?.filename || req.params.id
     });
   } catch (error) {
+    logMediaEvent("delete:error", {
+      requestId: req.params.id,
+      ...toErrorDetails(error)
+    }, "error");
+
     return res.status(500).json({ error: "Failed to delete file", details: error.message });
   }
 });
@@ -520,5 +701,6 @@ router.delete("/:id", authMiddleware, async (req, res) => {
 module.exports = {
   router,
   uploadMiddleware: upload.single("media"),
-  uploadHandler
+  uploadHandler,
+  listMediaItems
 };
