@@ -10,6 +10,8 @@ function respondUnauthorized(res) {
 function authMiddleware(req, res, next) {
   if (!AUTH_ENABLED) return next();
   if (req.method === "OPTIONS") return next();
+  const requestPath = req.path || req.originalUrl || "";
+  if (requestPath === "/health" || requestPath.startsWith("/api/auth")) return next();
 
   const authHeader = req.headers.authorization || "";
   if (!authHeader.startsWith("Bearer ")) {
