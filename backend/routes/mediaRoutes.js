@@ -5,6 +5,7 @@ const { GridFSBucket } = require("mongodb");
 const mime = require("mime-types");
 
 const Media = require("../models/Media");
+const authMiddleware = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -124,7 +125,7 @@ async function uploadHandler(req, res) {
   }
 }
 
-router.get("/", async (req, res) => {
+router.get("/", authMiddleware, async (req, res) => {
   try {
     const media = await Media.find().sort({ uploadDate: -1 });
     const items = media.map((item) => ({
@@ -145,7 +146,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/upload", upload.single("media"), uploadHandler);
+router.post("/upload", authMiddleware, upload.single("media"), uploadHandler);
 
 router.get("/:id/stream", async (req, res) => {
   try {
@@ -292,7 +293,7 @@ router.get("/:id/download", async (req, res) => {
   }
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", authMiddleware, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ error: "Invalid media ID format" });

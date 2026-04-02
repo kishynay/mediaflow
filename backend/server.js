@@ -53,7 +53,7 @@ if (SERVE_FRONTEND) {
 
 // Route mounting
 app.use("/api/auth", authRoutes);
-app.use("/api/media", authMiddleware, mediaModule.router);
+app.use("/api/media", mediaModule.router);
 
 // Backward compatibility for old frontend upload endpoint: POST /api/upload
 app.post("/api/upload", authMiddleware, mediaModule.uploadMiddleware, mediaModule.uploadHandler);
