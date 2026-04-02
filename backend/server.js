@@ -17,6 +17,9 @@ const allowedOrigins = (process.env.CORS_ORIGINS || "")
   .split(",")
   .map((v) => v.trim())
   .filter(Boolean);
+const defaultAllowedOrigins = ["https://kishynay-mediaflow.vercel.app"];
+const mergedAllowedOrigins = Array.from(new Set([...defaultAllowedOrigins, ...allowedOrigins]));
+const projectPreviewOriginPattern = /^https:\/\/kishynay-mediaflow(?:-[a-z0-9-]+)?\.vercel\.app$/i;
 
 const corsOptions = {
   origin(origin, callback) {
@@ -26,7 +29,12 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    if (allowedOrigins.includes(origin)) {
+    if (mergedAllowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow Vercel preview URLs for this project (e.g. -git-main-<hash>.vercel.app)
+    if (projectPreviewOriginPattern.test(origin)) {
       return callback(null, true);
     }
 
